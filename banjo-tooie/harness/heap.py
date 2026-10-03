@@ -11,6 +11,8 @@ KNOWN = {
     0x80127600: "Text Script",
 }
 LOADED_DLL_ARRAY = 0x80126738
+# asset cache (core2 func_800D5B34): data pointers, asset ids, refcounts
+ASSET_PTRS, ASSET_IDS, ASSET_COUNT = 0x8012B450, 0x8012B6E0, 0x82
 
 
 def ok(p):
@@ -71,6 +73,10 @@ def labels(emu):
         off += 4
         if off > 0x1000:
             break
+    for k in range(ASSET_COUNT):
+        p = emu.r32(ASSET_PTRS + 4 * k)
+        if ok(p):
+            lab.setdefault(p, f"asset {emu.r16(ASSET_IDS + 2 * k):04X}")
     # objects: label blocks referenced from model-1 slots
     for i, o in enumerate(bt.objects(emu)):
         for k in range(0, 0x9C, 4):

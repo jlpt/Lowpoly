@@ -216,11 +216,18 @@ class Emu:
             self.done.set()
             self.core.CoreDoCommand(6, 0, None)
 
-    def run(self, script, timeout=3600):
+    def run(self, script, timeout=3600, stall=30):
         self._gen = script(self)
         th = threading.Thread(target=lambda: self.core.CoreDoCommand(5, 0, None), daemon=True)
         th.start()
-        self.done.wait(timeout)
+        t_end, last, last_t = time.time() + timeout, -1, time.time()
+        while not self.done.wait(2) and time.time() < t_end:
+            if self.frame != last:
+                last, last_t = self.frame, time.time()
+            elif time.time() - last_t > stall:  # core stopped delivering frames: give up
+                sys.stderr.write(f"emu: no frame for {stall}s at frame {self.frame}, aborting\n")
+                sys.stderr.flush()
+                os._exit(3)
         th.join(10)
         time.sleep(1.5)  # let background savestate compression finish
         if self.error:

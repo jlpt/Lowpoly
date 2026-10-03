@@ -11,7 +11,10 @@
 local VERSION = "USA" -- "USA", "EUR", "AUS", "JPN"
 
 local V = {
-	USA = { player_pointer = 0x135490, player_index = 0x1354DF, map = 0x132DC2 },
+	-- asset_ptrs/asset_ids: asset cache (pointer[0x82], u16 id[0x82]); dll_array: loaded code
+	-- overlays; om2: loading-zone/prop array pointer. USA only for these extras.
+	USA = { player_pointer = 0x135490, player_index = 0x1354DF, map = 0x132DC2,
+	        asset_ptrs = 0x12B450, asset_ids = 0x12B6E0, dll_array = 0x126738, om2 = 0x132DB0 },
 	EUR = { player_pointer = 0x13A4A0, player_index = 0x13A4EF, map = 0x137DD2 },
 	AUS = { player_pointer = 0x13A210, player_index = 0x13A25F, map = 0x137B42 },
 	JPN = { player_pointer = 0x12F660, player_index = 0x12F6AF, map = 0x12CF92 },
@@ -71,6 +74,45 @@ local function findBlock(ps, addr)
 	end
 end
 
+-- What a heap block is, as far as we can tell: a loaded code overlay (DLL) by name, an asset by
+-- id, Banjo's floor-triangle cache (PlayerState component 37), or the loading-zone array.
+local function dllName(base)
+	local off = 0x3C;
+	for _ = 1, 400 do
+		if not isPtr(r32(base + off)) then break end
+		off = off + 4;
+	end
+	local t = {};
+	for i = 0, 47 do
+		local c = r8(base + off + i);
+		if c == 0 then break end
+		if c < 32 or c > 126 then return nil end
+		t[#t + 1] = string.char(c);
+	end
+	if #t > 2 then return table.concat(t) end
+end
+
+local function blockLabel(ps, data)
+	if data == r32(ps + 0x6AC) then return "Banjo floor cache (fall-through)" end
+	local function m32(a) return mainmemory.read_u32_be(a) end -- M.* are physical addresses
+	if M.om2 and data == m32(M.om2) then return "loading-zone array" end
+	if M.asset_ptrs then
+		for k = 0, 0x81 do
+			if m32(M.asset_ptrs + 4 * k) == data then
+				return string.format("asset %04X", mainmemory.read_u16_be(M.asset_ids + 2 * k));
+			end
+		end
+	end
+	if M.dll_array then
+		for k = 0, 0x3FF do
+			local p = m32(M.dll_array + 4 * k);
+			if not isPtr(p) then break end
+			if p == data then return "code: " .. (dllName(p) or "DLL") end
+		end
+	end
+	return "";
+end
+
 local function describeTarget(ps, target)
 	local psEnd = r32(ps - 0x10 + 4); -- next block header = end of PlayerState block
 	if isPtr(psEnd) and target >= ps and target < psEnd then
@@ -87,7 +129,7 @@ local function describeTarget(ps, target)
 	if data == nil then return "unknown (heap walk failed)" end
 	local where = inHeader and "HEAP HEADER of " or "";
 	local past = isPtr(psEnd) and string.format(" (0x%X past PlayerState end)", target - psEnd) or "";
-	return string.format("%sheap block %s size 0x%X +0x%X%s", where, hex(data), size, target - data, past);
+	return string.format("%sheap block %s size 0x%X +0x%X %s%s", where, hex(data), size, target - data, blockLabel(ps, data), past);
 end
 
 local function zoneString(addr)
@@ -104,7 +146,7 @@ local function rawString(addr)
 	return table.concat(t, " ");
 end
 
-local lastIndex = nil;
+local lastIndex, lastPs = nil, nil;
 
 local function onFrame()
 	local ps = getPlayer();
@@ -131,6 +173,12 @@ local function onFrame()
 	line("  will write: " .. rawString(stick + STICK_ZONE));
 	line("  live zone: " .. zoneString(stick + STICK_ZONE));
 
+	if lastPs ~= nil and ps ~= lastPs then
+		-- heap compaction (e.g. a backflip or a new animation loading) moved Banjo's data: every
+		-- target moves with it, relative to the blocks around it
+		print(string.format("[frame %d] PlayerState moved %s -> %s (%+d bytes): targets shifted", emu.framecount(), hex(lastPs), hex(ps), ps - lastPs));
+	end
+	lastPs = ps;
 	if lastIndex ~= nil and idx ~= lastIndex then
 		print(string.format("[frame %d] zone index %d -> %d (state %03X, target %s)", emu.framecount(), lastIndex, idx, cur, hex(target)));
 	end
@@ -144,7 +192,29 @@ PIM = {
 		local ps = getPlayer();
 		if ps then mainmemory.write_u8(phys(r32(ps + PS_STICK) + STICK_INDEX), n % 256) end
 	end,
+	-- PIM.map(): print every heap block the glitch can reach right now, with the glitch counts
+	-- that land in it (count k writes to slot 256-k). Compare rooms/routes with this.
+	map = function()
+		local ps = getPlayer();
+		if not ps then return end
+		local stick = r32(ps + PS_STICK);
+		local lo, hi = stick + 20 * ZONE_SIZE, stick + 256 * ZONE_SIZE;
+		local h = ps - 0x10;
+		print(string.format("Map %03X  PlayerState %s  stick %s", mainmemory.read_u16_be(M.map), hex(ps), hex(stick)));
+		for _ = 1, 4000 do
+			local nxt = r32(h + 4);
+			if not isPtr(nxt) or nxt <= h or h >= hi then break end
+			if nxt > lo then
+				local i0 = math.max(20, math.floor((h - stick) / ZONE_SIZE));
+				local i1 = math.min(255, math.floor((nxt - 1 - stick) / ZONE_SIZE));
+				local used = bit.band(r32(h + 0xC), 0xC0) ~= 0;
+				print(string.format("  glitches %3d-%3d  block %s size %5X %s %s", 256 - i1, 256 - i0, hex(h + 0x10),
+					nxt - h - 0x10, used and "    " or "FREE", blockLabel(ps, h + 0x10)));
+			end
+			h = nxt;
+		end
+	end,
 };
 
 event.onframeend(onFrame, "PIM Pack watcher");
-print("PIM Pack watcher loaded (" .. VERSION .. "). PIM.setIndex(n) sets the zone index.");
+print("PIM Pack watcher loaded (" .. VERSION .. "). PIM.setIndex(n) sets the zone index, PIM.map() lists what each glitch count hits.");
