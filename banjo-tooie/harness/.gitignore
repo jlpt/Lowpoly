@@ -1,0 +1,8 @@
+states/
+data/
+cfg/
+shots*/
+*.so
+*.z64
+*.st
+__pycache__/
