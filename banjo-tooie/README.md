@@ -355,6 +355,11 @@ nothing); **30 falls through the floor**.
 
 ![Workers' Quarters, 6 glitches + backflip + Snooze Pack: Banjo falls through the floor](img/wq_6_glitches_fall.png)
 
+After that write Banjo stays in the Falling state (`0x2F`) just below the floor (y ≈ −45)
+for the whole 1200 frames watched (`t_fall.py`). There's no void-out or respawn in that
+time, and the stick nudges him around a little. Whether falling further leads anywhere
+useful depends on the room's geometry below the floor; not tested.
+
 (The test build regenerated all textures, hence the colours.)
 
 Patterns that should carry over to other rooms:
@@ -445,6 +450,8 @@ Patterns that should carry over to other rooms:
   * `t_probe.py ROOMSTATE A|B IDX [rice]`: detailed diff (objects, items, flags) and
     screenshots for one write.
   * `t_stickmap.py` measures raw stick → stick value.
+  * `t_fall.py ROOMSTATE IDX [rice] [frames]` follows Banjo after a write (state, position,
+    screenshots).
   * `om2.py` (loading-zone array), `dllmap.py` (overlay address → decomp function).
   * The emulator run aborts after 30–40 s without frames, which is how game crashes show up
     in mupen64plus.
